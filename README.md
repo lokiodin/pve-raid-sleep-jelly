@@ -10,8 +10,11 @@ Drives are powered up/down with `hdparm -y` at the same time.
 
 ## Requirements
 
-* Tested on Proxmox 7.2 (Debian 11 Bullseye): 
-  * `python3` >= 3.9.2
+* Tested on 
+  * Proxmox 7.2 (Debian 11 Bullseye):
+  * Truenas SCALE API v2.0
+  * Jellyfin API v10.7.7
+  * `python3` >= 3.9.2 (see requirement.txt)
     * os
     * argparse
     * time
@@ -27,3 +30,10 @@ Drives are powered up/down with `hdparm -y` at the same time.
     * Use `find /dev/disk/by-id` and `blkid` to find out your disk IDs
 2. Read and Execute `sudo ./install.sh`
     * This will set up a `systemd` service to start the program
+
+## Dev
+
+Go into `venv` if you want. Install packages in requirement.txt.
+```
+python3 -m pip install -r requirement.txt
+```
