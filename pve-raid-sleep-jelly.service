@@ -2,10 +2,10 @@
 Description=Power down RAID disks and shutdown Truenas SCALE VM if no user is connected to Jellyfin server.
 
 [Service]
-EnvironmentFile=/etc/pve-raid-sleep-jelly.conf
+EnvironmentFile=/etc/pve-raid-sleep-jelly/pve-raid-sleep-jelly.conf
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/usr/local/sbin/pve-raid-sleep-jelly --timeout $TIME $DISKS
+ExecStart=/usr/local/sbin/pve-raid-sleep-jelly --time $TIME --truenas-server $TRUENAS_URL --truenas-token $TRUENAS_API_TOKEN --pve-vm-id-truenas $TRUENAS_VM_ID --jellyfin-server $JELLYFIN_URL --jellyfin-token $JELLYFIN_API_TOKEN $DISKS
 Restart=always
 RestartSec=10s
 
