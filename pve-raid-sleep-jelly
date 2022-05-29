@@ -37,8 +37,8 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-q", "--quiet", dest="verbose",
-        default=False, action="store_false",
+        "-v", "--verbose", dest="verbose",
+        default=False, action="store_true",
         help="do not print status messages",
     )
 
@@ -151,7 +151,6 @@ def api_jellyfin_hasOpenSession():
 def api_truenas_isReady():
     # use Truenas API
     # Swagger at https://truenas.example.com/api/docs/
-
     url = f"{args.truenas_server}/api/v2.0/system/ready"
 
     payload={}
@@ -269,14 +268,14 @@ parse_args()
 last_access = time.time()
 last_standby = last_access
 
-dprint(
+print(
     "Monitoring %s. Time = %s" % (
         ", ".join(args.disk_devs), hms(args.time)
     )
 )
 
-
 while True:
+    time.sleep(args.time)
 
     disk_state = is_disk_up()
     now = time.time()
@@ -321,6 +320,5 @@ while True:
         if is_disk_up():
             dprint("Powering down after %s" % hms(now - last_standby))
             power_down()
-
 
     time.sleep(args.time)
