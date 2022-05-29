@@ -11,6 +11,11 @@ import json
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
+
+##############
+## FUNCTION ##
+##############
+
 def parse_args():
     global args
 
@@ -19,34 +24,63 @@ def parse_args():
         description=textwrap.dedent('''\
             Power down RAID disks (in standby) and shitdown Truenas server if no user is connected to Jellyfin server.
             Power up RAID disks if a user connect to the Jellyfin server.
-
+            
             %(prog)s comes with ABSOLUTELY NO WARRANTY. This is free software,
             and you are welcome to redistribute it under certain conditions.
-            See the GNU General Public Licence version 3 (or later) for details.        
+            See the GNU General Public Licence version 3 (or later) for details.       
         ''')
     )
 
     parser.add_argument(
         "--version", action="version",
-        version="%(prog)s 1.0"
+        version="%(prog)s 1.2"
     )
 
     parser.add_argument(
-        "-q", "--quiet", dest="verbose",
-        default=False, action="store_false",
+        "-v", "--verbose", dest="verbose",
+        default=False, action="store_true",
         help="do not print status messages",
     )
 
     parser.add_argument(
-        "-t", "--timeout", dest="timeout",
+        "-t", "--time", dest="time",
         default=1800, type=int,
-        help="check state every timeout in seconds (default: %(default)s)"
-        # help="standby timeout in seconds (default: %(default)s)"
+        help="check state every time in seconds (default: %(default)s)"
     )
 
     parser.add_argument(
         "disk", nargs="+",
         help="Disks to monitor"
+    )
+
+    parser.add_argument(
+        "--truenas-server", dest="truenas_server",
+        required=True,
+        help="URL to truenas server (ex: https://truenas.example.com:8096)"
+    )
+
+    parser.add_argument(
+        "--truenas-token", dest="truenas_token",
+        required=True,
+        help="API key for truenas API (see: https://www.truenas.com/docs/)"
+    )
+
+    parser.add_argument(
+        "--pve-vm-id-truenas", dest="truenas_vm_id",
+        type=int, required=True,
+        help="VM ID of truenas server on proxmox appliance"
+    )
+
+    parser.add_argument(
+        "--jellyfin-server", dest="jellyfin_server",
+        required=True,
+        help="URL to jellyfin server (ex: http://jellyfin.example.com:8096)"
+    )
+
+    parser.add_argument(
+        "--jellyfin-token", dest="jellyfin_token",
+        required=True,
+        help="API key for jellyfin API"
     )
 
     args = parser.parse_args()
@@ -62,10 +96,9 @@ def dprint(*message):
 
 def eprint(*message):
     print("[ERROR] ", end="")
-    if args.verbose:
-        for s in message:
-            print(s, end=" ")
-        print()
+    for s in message:
+        print(s, end=" ")
+    print()
 
 
 def power_down():
@@ -85,234 +118,207 @@ def wake_up():
     ]:
         p.wait()
 
-
-def diskstats():
-    # see https://www.kernel.org/doc/Documentation/iostats.txt
-    #
-    columns = [
-        "major_dev_num", "minor_dev_num", "device",
-        "reads", "reads_merged", "sectors_read", "ms_reading",
-        "writes", "writes_merged", "sectors_written", "ms_writing",
-        "current_ios", "ms_doing_io", "weighted_ms_doing_io"
-    ]
-
-    result = {}
-    for line in open("/proc/diskstats"):
-        parts = line.split()
-        if len(parts) < len(columns):
-            continue
-
-        data = dict(list(zip(columns, parts)))
-
-        result["/dev/" + data["device"]] = {
-            k: int(v) for k, v in list(data.items()) if k != "device"
-        }
-
-    return result
-
-
 def hms(s):
     return "%d:%02d:%02d" % (s / 3600, s / 60 % 60, s % 60)
 
-def has_open_session_jellyfin():
+def api_jellyfin_hasOpenSession():
     # use Jellyfin API
-    # http://jellyfin.lan:8096/api-docs/swagger/index.html
+    # Swagger at http://jellyfin.example.com:8096/api-docs/swagger/index.html
 
-    url = "http://jellyfin.lan:8096/Sessions?activeWithinSeconds=1"
+    url = f"{args.jellyfin_server}/Sessions?activeWithinSeconds=1"
 
     payload={}
     headers = {
-    'Accept': 'application/json',
-    'X-MediaBrowser-Token': '60530c84ac2a484b997b0a9b446fb725'
+        'Accept': 'application/json',
+
+        # In the docs, the header is "X-Emby-Authorization" but do not work
+        'X-MediaBrowser-Token': f'{args.jellyfin_token}'
     }
 
     try:
         response = requests.request("GET", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
-        dprint("[has_open_session_jellyfin] %s: got response code %s" % (url, response.status_code))
+        dprint("[api_jellyfin_hasOpenSession] %s: got response code %s" % (url, response.status_code))
         if response.status_code == 200:
-            dprint("[has_open_session_jellyfin] User(s) connected" if response.text != '[]' else "No user connected")
+            dprint("[api_jellyfin_hasOpenSession] User(s) connected" if response.text != '[]' else "[api_jellyfin_hasOpenSession] No user connected")
             return False if response.text == '[]' else True
         else:
             return False
     except:
-        eprint("[has_open_session_jellyfin] Error while requesting Jellyfin API. Can't reach %s" % (url))
+        eprint("[api_jellyfin_hasOpenSession] Error while requesting Jellyfin API. Can't reach %s" % (url))
         eprint("%s" % (response.text))
         return False
 
-def is_truenas_ready():
-    # use Truenas Scale API
-    # https://truenas.lan/api/docs/
-    url = "https://truenas.lan/api/v2.0/system/ready"
+def api_truenas_isReady():
+    # use Truenas API
+    # Swagger at https://truenas.example.com/api/docs/
+    url = f"{args.truenas_server}/api/v2.0/system/ready"
 
     payload={}
     headers = {
         'accept': '*/*',
-        'Authorization': 'Bearer 1-SagkU75L4mDIZkORBOKS6lE66jWbgmo9xfo22JcUCOKDoSY8xKoC5lMmW7K3vEvA'
+        'Authorization': f'Bearer {args.truenas_token}'
     }
 
     try:
         response = requests.request("GET", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
-        dprint("[is_truenas_ready] %s: got response code %s" % (url, response.status_code))
+        dprint("[api_truenas_isReady] %s: got response code %s" % (url, response.status_code))
 
-        if response.status_code == 200 and response.text == "true":
-            return True
-        else:
-            return False
+        return True if response.status_code == 200 and response.text == "true" else False
+        #     return True
+        # else:
+        #     return False
     except:
-        eprint("[is_truenas_ready] Error while requesting Truenas SCALE API. Can't reach %s" % (url))
+        eprint("[api_truenas_isReady] Error while requesting Truenas API. Can't reach %s" % (url))
         return False
 
-def set_truenas_down():
-    # use Truenas Scale API
-    # https://truenas.lan/api/docs/
+def api_truenas_shutdown():
+    # use Truenas API
+    # Swagger at https://truenas.example.com/api/docs/
 
-    if not is_truenas_ready():
-        return True
-
-    url = "https://truenas.lan/api/v2.0/system/shutdown"
+    url = f"{args.truenas_server}/api/v2.0/system/shutdown"
 
     payload = json.dumps({
-    "delay": 0
+        "delay": 0
     })
     headers = {
-    'accept': '*/*',
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer 1-SagkU75L4mDIZkORBOKS6lE66jWbgmo9xfo22JcUCOKDoSY8xKoC5lMmW7K3vEvA'
+        'accept': '*/*',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {args.truenas_token}'
     }
 
     try:
         response = requests.request("POST", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
-        dprint("[set_truenas_down] %s: got response code %s" % (url, response.status_code))
+        dprint("[api_truenas_shutdown] %s: got response code %s" % (url, response.status_code))
         return True if response.status_code == 200 else False    
     except:
-        eprint("[set_truenas_down] Error while requesting Truenas SCALE API. Can't reach %s" % (url))
+        eprint("[api_truenas_shutdown] Error while requesting Truenas API. Can't reach %s" % (url))
         eprint("%s" % (response.text))
         return False
 
 def pve_check_truenas_up():
     # use pve CLI to see if the VM/CT is up
 
-    CMD = "qm status 100"
+    CMD = f"qm status {args.truenas_vm_id}"
     res = getstatusoutput(CMD)
 
     if res[0] == 0:
         if res[1] in "status: running":
-            print(res)
-            dprint("[pve_check_truenas_up] VM Truenas (100) is running")
+            dprint(f"[pve_check_truenas_up] VM Truenas ({args.truenas_vm_id}) is running")
             return True
+        elif res[1] in "status: stopped":
+            dprint(f"[pve_check_truenas_up] VM Truenas ({args.truenas_vm_id}) is stopped")
+            return False
         else:
-            dprint("[pve_check_truenas_up] VM Truenas (100) is not running")
+            eprint(f"[pve_check_truenas_up] VM Truenas ({args.truenas_vm_id}) is in a state not dealt in the script")
             return False
     else:
-        eprint("[pve_check_truenas_up] Error while checking if VM Truenas (100) is running. Return cmd code: %s" % (res))
+        eprint(f"[pve_check_truenas_up] Error while checking if VM Truenas ({args.truenas_vm_id}) is running. Return cmd code: {res}")
         return False
 
 def pve_start_truenas():
     # use pve CLI to see if the VM/CT is up
 
     if pve_check_truenas_up():
-        dprint("[pve_start_truenas] VM Truenas (100) already started")
+        dprint(f"[pve_start_truenas] VM Truenas ({args.truenas_vm_id}) already started")
         return True
     
-    CMD = "qm start 100"
+    CMD = f"qm start {args.truenas_vm_id}"
     res = getstatusoutput(CMD)
     if res[0] == 0:
-        dprint("[pve_start_truenas] VM Truenas (100) is started")
+        dprint(f"[pve_start_truenas] VM Truenas ({args.truenas_vm_id}) is started")
         return True
     else:
-        eprint("[pve_start_truenas] Error while starting VM Truenas (100). Return cmd code: %s" % (res))
+        eprint(f"[pve_start_truenas] Error while starting VM Truenas ({args.truenas_vm_id}). Return cmd code: {res}")
         return False
 
 def pve_stop_truenas():
     # use pve CLI to see if the VM/CT is up
 
     if not pve_check_truenas_up():
-        dprint("[pve_stop_truenas] VM Truenas (100) already stopped")
+        dprint(f"[pve_stop_truenas] VM Truenas ({args.truenas_vm_id}) already stopped")
         return True
 
-    CMD = "qm stop 100"
+    CMD = f"qm stop {args.truenas_vm_id}"
     res = getstatusoutput(CMD)
     if res[0] == 0:
-        dprint("[pve_stop_truenas] VM Truenas (100) is stopping")
+        dprint(f"[pve_stop_truenas] VM Truenas ({args.truenas_vm_id}) is stopping")
         return True
     else:
-        eprint("[pve_stop_truenas] Error while stopping VM Truenas (100). Return cmd code: %s" % (res))
+        eprint(f"[pve_stop_truenas] Error while stopping VM Truenas ({args.truenas_vm_id}). Return cmd code: {res}")
         return False
 
-def get_state_disk():
-    
-    ds = []
+def is_disk_up():
+    # check the state of the disks. Count the disk as running if not in standby state.
 
+    ds = 0
     for d in args.disk_devs:
         CMD = f"hdparm -C {d}"
         res = getstatusoutput(CMD)
-        ds.append(0 if 'standby' in res[1] else 1)
+        ds += 0 if 'standby' in res[1] else 1
 
-    dprint("[get_state_disk] ", ds)
-    return 1 if sum(ds) == len(args.disk_devs) else 0
+    dprint("[is_disk_up] ", ds)
 
+    return True if ds == len(args.disk_devs) else False
 
+###########
+## LOGIC ##
+###########
 
-
-# ----- ----- ----- ----- -----
 parse_args()
-
-old_stats = None
 last_access = time.time()
 last_standby = last_access
-disk_state = get_state_disk()
 
-
-dprint(
-    "Monitoring %s. Timeout = %s" % (
-        ", ".join(args.disk_devs), hms(args.timeout)
+print(
+    "Monitoring %s. Time = %s" % (
+        ", ".join(args.disk_devs), hms(args.time)
     )
 )
 
 while True:
+    time.sleep(args.time)
 
-    stats = diskstats()
-    stats = {k: v for k, v in list(stats.items()) if k in args.disk_devs}
-
+    disk_state = is_disk_up()
     now = time.time()
 
-    if has_open_session_jellyfin(): # There is at least one session, ie. one user connected
+    if api_jellyfin_hasOpenSession():
 
-        if disk_state == 0:
-            disk_state = 1
-            last_standby = now
-
+        if not is_disk_up():
             dprint("Waking up after %s of inactivity" % hms(now - last_access))
             wake_up()
 
+            last_standby = now
+
+
+        if not(pve_check_truenas_up() and api_truenas_isReady()):
             dprint("Starting truenas")
             pve_start_truenas()
 
-            while not is_truenas_ready():
+            # Waiting that truenas is ready
+            while not api_truenas_isReady():
                 time.sleep(1)
+
         last_access = now
 
-    else: # There is no open sessions on Jellyfin
+        # Check if disk are really up
+        if not is_disk_up():
+            dprint("Waking up after %s of inactivity" % hms(now - last_access))
+            wake_up()
 
-        if pve_check_truenas_up():
-            dprint("Powering off truenas")
-            set_truenas_down()
-            
-            # Waiting 10 seconds, the time that Truenas shutdown
-            time.sleep(2)
+            last_standby = now
 
-            while pve_check_truenas_up():
-                time.sleep(5)
 
-            if disk_state == 1:
-                disk_state = 0
-                dprint("Powering down after %s" % hms(now - last_standby))
-                power_down()
-                
-                if disk_state != get_state_disk():
-                    eprint("Error when power down disk in the if disk_state != get_state_disk():")
-                    exit(1)
+    else:
 
-    old_stats = stats
+        if pve_check_truenas_up() or api_truenas_isReady():
+            dprint("Stopping truenas")
+            pve_stop_truenas()
 
-    time.sleep(args.timeout)
+            # Waiting that truenas is down
+            while api_truenas_isReady():
+                time.sleep(1)
+
+        if is_disk_up():
+            dprint("Powering down after %s" % hms(now - last_standby))
+            power_down()
+
+    time.sleep(args.time)
