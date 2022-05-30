@@ -43,9 +43,15 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-t", "--time", dest="time",
+        "--interval-check", dest="interval_check",
+        default=10, type=int,
+        help="check every time (in seconds) if there is no user connected on jellyfin (default: %(default)s)"
+    )
+
+    parser.add_argument(
+        "--min-time-wakeup", dest="min_time_wakeup",
         default=1800, type=int,
-        help="check state every time in seconds (default: %(default)s)"
+        help="minimum time between a wake up and a shutdown of disk (to limit the wear and tear of disks) (default: %(default)s)"
     )
 
     parser.add_argument(
@@ -267,17 +273,17 @@ def is_disk_up():
 parse_args()
 last_access = time.time()
 last_standby = last_access
+last_check_down = last_access
+
 
 print(
-    "Monitoring %s. Time = %s" % (
-        ", ".join(args.disk_devs), hms(args.time)
+    "Monitoring %s. Minimum time of wake up state = %s. Interval between each check = %s" % (
+        ", ".join(args.disk_devs), hms(args.min_time_wakeup), hms(args.interval_check)
     )
 )
 
 while True:
-    time.sleep(args.time)
 
-    disk_state = is_disk_up()
     now = time.time()
 
     if api_jellyfin_hasOpenSession():
@@ -286,28 +292,17 @@ while True:
             dprint("Waking up after %s of inactivity" % hms(now - last_access))
             wake_up()
 
-            last_standby = now
-
-
         if not(pve_check_truenas_up() and api_truenas_isReady()):
             dprint("Starting truenas")
             pve_start_truenas()
 
             # Waiting that truenas is ready
             while not api_truenas_isReady():
-                time.sleep(1)
+                time.sleep(0.5)
+        
+        last_standby = now
 
-        last_access = now
-
-        # Check if disk are really up
-        if not is_disk_up():
-            dprint("Waking up after %s of inactivity" % hms(now - last_access))
-            wake_up()
-
-            last_standby = now
-
-
-    else:
+    elif now - last_check_down >= args.min_time_wakeup:
 
         if pve_check_truenas_up() or api_truenas_isReady():
             dprint("Stopping truenas")
@@ -315,10 +310,12 @@ while True:
 
             # Waiting that truenas is down
             while api_truenas_isReady():
-                time.sleep(1)
+                time.sleep(0.5)
 
         if is_disk_up():
             dprint("Powering down after %s" % hms(now - last_standby))
             power_down()
 
-    time.sleep(args.time)
+        last_check_down = now
+
+    time.sleep(args.interval_check)
