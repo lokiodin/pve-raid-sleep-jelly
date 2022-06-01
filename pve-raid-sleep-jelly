@@ -168,6 +168,7 @@ def api_truenas_isReady():
     try:
         response = requests.request("GET", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
         dprint("[api_truenas_isReady] %s: got response code %s" % (url, response.status_code))
+        dprint("[api_truenas_isReady] %s: got response %s" % (url, response.text))
 
         return True if response.status_code == 200 and response.text == "true" else False
         #     return True
@@ -198,7 +199,6 @@ def api_truenas_shutdown():
         return True if response.status_code == 200 else False    
     except:
         eprint("[api_truenas_shutdown] Error while requesting Truenas API. Can't reach %s" % (url))
-        eprint("%s" % (response.text))
         return False
 
 def pve_check_truenas_up():
@@ -294,23 +294,23 @@ while True:
 
         if not(pve_check_truenas_up() and api_truenas_isReady()):
             dprint("Starting truenas")
-            pve_start_truenas()
-
-            # Waiting that truenas is ready
-            while not api_truenas_isReady():
-                time.sleep(0.5)
-        
+            
+            if pve_start_truenas():
+                # Waiting that truenas is ready
+                while not api_truenas_isReady():
+                    time.sleep(0.5)
+            
         last_standby = now
 
     elif now - last_check_down >= args.min_time_wakeup:
 
         if pve_check_truenas_up() or api_truenas_isReady():
             dprint("Stopping truenas")
-            pve_stop_truenas()
+            if pve_stop_truenas():
 
-            # Waiting that truenas is down
-            while api_truenas_isReady():
-                time.sleep(0.5)
+                # Waiting that truenas is down
+                while api_truenas_isReady():
+                    time.sleep(0.5)
 
         if is_disk_up():
             dprint("Powering down after %s" % hms(now - last_standby))
