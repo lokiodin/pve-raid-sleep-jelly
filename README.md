@@ -31,6 +31,9 @@ Drives are powered up/down with `hdparm -y` at the same time.
 2. Read and Execute `sudo ./install.sh`
     * This will set up a `systemd` service to start the program
 
+## +
+- Get an accurate way to determine if users are connected to Jellyfin. Today, it use the endpoint `/Sessions` to get the current sessions but there are not really coherent with user connection (The session is still ON on Jellyfin when the user close his window ...)
+
 ## Dev
 
 Go into `venv` if you want. Install packages in requirement.txt.

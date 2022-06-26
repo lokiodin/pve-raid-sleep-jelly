@@ -43,9 +43,15 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-t", "--time", dest="time",
+        "--interval-check", dest="interval_check",
+        default=10, type=int,
+        help="check every time (in seconds) if there is no user connected on jellyfin (default: %(default)s)"
+    )
+
+    parser.add_argument(
+        "--min-time-wakeup", dest="min_time_wakeup",
         default=1800, type=int,
-        help="check state every time in seconds (default: %(default)s)"
+        help="minimum time between a wake up and a shutdown of disk (to limit the wear and tear of disks) (default: %(default)s)"
     )
 
     parser.add_argument(
@@ -145,8 +151,36 @@ def api_jellyfin_hasOpenSession():
             return False
     except:
         eprint("[api_jellyfin_hasOpenSession] Error while requesting Jellyfin API. Can't reach %s" % (url))
-        eprint("%s" % (response.text))
         return False
+
+def api_jellyfin_refreshLibrary():
+    # use Jellyfin API
+    # Swagger at http://jellyfin.example.com:8096/api-docs/swagger/index.html
+
+    url = f"{args.jellyfin_server}/Library/Refresh"
+
+    payload={}
+    headers = {
+        'Accept': 'application/json',
+
+        # In the docs, the header is "X-Emby-Authorization" but do not work
+        'X-MediaBrowser-Token': f'{args.jellyfin_token}'
+    }
+
+    try:
+        response = requests.request("POST", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
+        dprint("[api_jellyfin_refreshLibrary] %s: got response code %s" % (url, response.status_code))
+        if response.status_code == 200:
+            dprint("[api_jellyfin_refreshLibrary] User(s) connected" if response.text != '[]' else "[api_jellyfin_refreshLibrary] No user connected")
+            return False if response.text == '[]' else True
+        else:
+            return False
+    except:
+        eprint("[api_jellyfin_refreshLibrary] Error while requesting Jellyfin API. Can't reach %s" % (url))
+        return False
+
+
+
 
 def api_truenas_isReady():
     # use Truenas API
@@ -162,6 +196,7 @@ def api_truenas_isReady():
     try:
         response = requests.request("GET", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
         dprint("[api_truenas_isReady] %s: got response code %s" % (url, response.status_code))
+        dprint("[api_truenas_isReady] %s: got response %s" % (url, response.text))
 
         return True if response.status_code == 200 and response.text == "true" else False
         #     return True
@@ -192,7 +227,6 @@ def api_truenas_shutdown():
         return True if response.status_code == 200 else False    
     except:
         eprint("[api_truenas_shutdown] Error while requesting Truenas API. Can't reach %s" % (url))
-        eprint("%s" % (response.text))
         return False
 
 def pve_check_truenas_up():
@@ -267,17 +301,17 @@ def is_disk_up():
 parse_args()
 last_access = time.time()
 last_standby = last_access
+last_check_down = last_access
+
 
 print(
-    "Monitoring %s. Time = %s" % (
-        ", ".join(args.disk_devs), hms(args.time)
+    "Monitoring %s. Minimum time of wake up state = %s. Interval between each check = %s" % (
+        ", ".join(args.disk_devs), hms(args.min_time_wakeup), hms(args.interval_check)
     )
 )
 
 while True:
-    time.sleep(args.time)
 
-    disk_state = is_disk_up()
     now = time.time()
 
     if api_jellyfin_hasOpenSession():
@@ -286,39 +320,32 @@ while True:
             dprint("Waking up after %s of inactivity" % hms(now - last_access))
             wake_up()
 
-            last_standby = now
-
-
         if not(pve_check_truenas_up() and api_truenas_isReady()):
             dprint("Starting truenas")
-            pve_start_truenas()
+            
+            if pve_start_truenas():
+                # Waiting that truenas is ready
+                while not api_truenas_isReady():
+                    time.sleep(0.5)
+        
+        api_jellyfin_refreshLibrary()
 
-            # Waiting that truenas is ready
-            while not api_truenas_isReady():
-                time.sleep(1)
+        last_standby = now
 
-        last_access = now
-
-        # Check if disk are really up
-        if not is_disk_up():
-            dprint("Waking up after %s of inactivity" % hms(now - last_access))
-            wake_up()
-
-            last_standby = now
-
-
-    else:
+    elif now - last_check_down >= args.min_time_wakeup:
 
         if pve_check_truenas_up() or api_truenas_isReady():
             dprint("Stopping truenas")
-            pve_stop_truenas()
+            if pve_stop_truenas():
 
-            # Waiting that truenas is down
-            while api_truenas_isReady():
-                time.sleep(1)
+                # Waiting that truenas is down
+                while api_truenas_isReady():
+                    time.sleep(0.5)
 
         if is_disk_up():
             dprint("Powering down after %s" % hms(now - last_standby))
             power_down()
 
-    time.sleep(args.time)
+        last_check_down = now
+
+    time.sleep(args.interval_check)
