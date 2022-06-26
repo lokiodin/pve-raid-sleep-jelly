@@ -151,8 +151,36 @@ def api_jellyfin_hasOpenSession():
             return False
     except:
         eprint("[api_jellyfin_hasOpenSession] Error while requesting Jellyfin API. Can't reach %s" % (url))
-        eprint("%s" % (response.text))
         return False
+
+def api_jellyfin_refreshLibrary():
+    # use Jellyfin API
+    # Swagger at http://jellyfin.example.com:8096/api-docs/swagger/index.html
+
+    url = f"{args.jellyfin_server}/Library/Refresh"
+
+    payload={}
+    headers = {
+        'Accept': 'application/json',
+
+        # In the docs, the header is "X-Emby-Authorization" but do not work
+        'X-MediaBrowser-Token': f'{args.jellyfin_token}'
+    }
+
+    try:
+        response = requests.request("POST", url, headers=headers, data=payload, timeout=(2, 5), verify=False)
+        dprint("[api_jellyfin_refreshLibrary] %s: got response code %s" % (url, response.status_code))
+        if response.status_code == 200:
+            dprint("[api_jellyfin_refreshLibrary] User(s) connected" if response.text != '[]' else "[api_jellyfin_refreshLibrary] No user connected")
+            return False if response.text == '[]' else True
+        else:
+            return False
+    except:
+        eprint("[api_jellyfin_refreshLibrary] Error while requesting Jellyfin API. Can't reach %s" % (url))
+        return False
+
+
+
 
 def api_truenas_isReady():
     # use Truenas API
@@ -299,7 +327,9 @@ while True:
                 # Waiting that truenas is ready
                 while not api_truenas_isReady():
                     time.sleep(0.5)
-            
+        
+        api_jellyfin_refreshLibrary()
+
         last_standby = now
 
     elif now - last_check_down >= args.min_time_wakeup:
